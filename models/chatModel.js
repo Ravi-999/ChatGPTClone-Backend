@@ -2,6 +2,10 @@ const mongoose = require("mongoose");
 
 const chatSchema = new mongoose.Schema(
   {
+    userID: {
+      type: String,
+      required: true,
+    },
     chatID: {
       type: String,
       required: true,
@@ -9,7 +13,6 @@ const chatSchema = new mongoose.Schema(
     },
     shareID: {
       type: String,
-      unique: true,
     },
     content: [
       {
@@ -26,6 +29,10 @@ const chatSchema = new mongoose.Schema(
     chatDescription: {
       type: String,
       required: true,
+    },
+    sharableLength: {
+      type: Number,
+      default: 0,
     },
   },
   {

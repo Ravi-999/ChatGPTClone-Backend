@@ -34,17 +34,22 @@ app.get("/", (req, res) => {
 app.post("/google/login", async (req, res) => {
   try {
     const { credential } = req.body;
-    const { name, email } = jwt.decode(credential);
-    const existingUser = await userModal.findOne({ email });
+    const { name, email, picture } = jwt.decode(credential);
+    let existingUser = await userModal.findOne({ email });
+
     if (!existingUser) {
       const newUser = new userModal({
+        userID: uuidv4(),
         fullName: name,
         email: email,
+        picture,
       });
-      await newUser.save();
+      existingUser = await newUser.save();
     }
+
+    const { userID } = existingUser;
     const token = jwt.sign({ name, email }, JWT_SECRET, { expiresIn: "1h" });
-    res.status(200).json({ token, name, email }).end();
+    res.status(200).json({ token, name, email, picture, userID }).end();
   } catch (err) {
     console.log(err);
   }
@@ -56,13 +61,25 @@ app.post("/c/answer", async (req, res) => {
   try {
     if (existingChat) {
       existingChat.content.push({ question, answer: randomAnswer });
+      const chat = await ChatModel.findOne({ chatID });
+
+      if (existingChat.userID !== req.user.userID) {
+        return res
+          .status(403)
+          .json({ error: "Forbidden: User does not have access to this chat" });
+      }
+
+      if (!chat) {
+        return res.status(404).json({ error: "Chat not found" });
+      }
+
       const updatedChat = await existingChat.save();
       res.status(200).json({ randomAnswer });
     } else {
       const newChat = new ChatModel({
+        userID: req.user.userID,
         chatID,
         chatDescription: question,
-        shareID: uuidv4(),
         content: [{ question, answer: randomAnswer }],
       });
       await newChat.save();
@@ -73,15 +90,42 @@ app.post("/c/answer", async (req, res) => {
     res.status(500).json({ error: "Internal Server Error" });
   }
 });
+app.post("/c/deleteChat", async (req, res) => {
+  const { chatID } = req.body;
+  try {
+    const chat = await ChatModel.findOne({ chatID });
+
+    if (!chat) {
+      return res.status(404).json({ error: "Chat not found" });
+    }
+    if (chat.userID !== req.user.userID) {
+      return res
+        .status(403)
+        .json({ error: "Forbidden: User does not have access to this chat" });
+    }
+    const deletedChat = await ChatModel.findOneAndDelete({ chatID });
+    if (deletedChat) {
+      res.status(200).json({ message: "Chat deleted successfully" });
+    } else {
+      res.status(404).json({ message: "Chat not found" });
+    }
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: "Internal server error" });
+  }
+});
 app.get("/c/getUser", async (req, res) => {
-  const { name, email } = req.user;
+  const { email } = req.user;
   const user = await userModal.findOne({ email });
   res.status(200).json(user).end();
 });
 app.get("/c/history", async (req, res) => {
-  const allChats = await ChatModel.find({}, "chatID chatDescription"); // Retrieve only chatID and chatDescription fields
-
-  // Extract chatID and chatDescription from each chat
+  const allChats = await ChatModel.find(
+    { userID: req.user?.userID },
+    "chatID chatDescription"
+  )
+    .sort({ createdAt: -1 })
+    .exec();
   const chatDetails = allChats.map((chat) => ({
     chatID: chat.chatID,
     chatDescription: chat.chatDescription,
@@ -91,7 +135,6 @@ app.get("/c/history", async (req, res) => {
 });
 app.get("/c/getChat/:chatID", async (req, res) => {
   const { chatID } = req.params;
-  console.log(chatID);
   try {
     const chat = await ChatModel.findOne({ chatID });
 
@@ -99,12 +142,72 @@ app.get("/c/getChat/:chatID", async (req, res) => {
       return res.status(404).json({ error: "Chat not found" });
     }
 
-    const contentArray = chat.content;
-    res.status(200).json(contentArray);
+    if (chat.userID !== req.user.userID) {
+      return res
+        .status(403)
+        .json({ error: "Forbidden: User does not have access to this chat" });
+    }
+
+    const { content, shareID } = chat;
+    res.status(200).json({ content, shareID });
   } catch (error) {
     console.error(error);
     res.status(500).json({ error: "Internal Server Error" });
   }
+});
+app.get("/c/sharedlink/:chatID", async (req, res) => {
+  const { chatID } = req.params;
+  const chat = await ChatModel.findOne({ chatID });
+  console.log("sharig chat", chat);
+  console.log(chatID, chat.shareID);
+  if (!chat) {
+    return res.status(404).json({ error: "Chat not found" });
+  }
+  if (chat.userID !== req.user.userID) {
+    return res
+      .status(403)
+      .json({ error: "Forbidden: User does not have access to this chat" });
+  }
+  const newShareID = uuidv4();
+  const sharableLength = chat.content.length;
+  const updatedChat = await ChatModel.findOneAndUpdate(
+    { chatID },
+    { shareID: newShareID, sharableLength },
+    { new: true }
+  );
+  res.status(200).json({ shareID: updatedChat.shareID });
+});
+app.get("/c/fork/forkChat/:shareID", async (req, res) => {
+  const { shareID } = req.params;
+  const chat = await ChatModel.findOne({ shareID });
+  console.log("Got the chat having shareID:-", shareID);
+  console.log("chat Details", chat);
+  if (!chat) {
+    return res.status(404).json({ error: "Chat not found" });
+  }
+  const shareableContent = chat.content.slice(0, chat.sharableLength);
+  const newChat = new ChatModel({
+    userID: req.user.userID,
+    chatID: uuidv4(),
+    content: shareableContent,
+    chatDescription: chat.chatDescription,
+  });
+
+  const updatedChat = await newChat.save();
+  console.log("updatedChat is", updatedChat);
+  res.status(200).json(newChat);
+});
+
+app.get("/share/:shareID", async (req, res) => {
+  const { shareID } = req.params;
+  const chat = await ChatModel.findOne({ shareID });
+  if (!chat) {
+    return res.status(404).json({ error: "Chat not found" });
+  }
+  const userDetails = await userModal.findOne({ userID: chat.userID });
+  res
+    .status(200)
+    .json({ chat, picture: userDetails.picture, name: userDetails.fullName });
 });
 app.listen(3001, () => {
   console.log("server running on 3001");
