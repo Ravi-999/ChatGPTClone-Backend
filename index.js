@@ -8,6 +8,7 @@ const userModal = require("./models/userModel");
 const { generateRandomString } = require("./utils/helper");
 const jwt = require("jsonwebtoken");
 const { authenticateToken } = require("./middleware/authenticate");
+const { default: axios } = require("axios");
 require("dotenv").config();
 
 app.use(cors());
@@ -30,6 +31,21 @@ db.once("open", async () => {
 
 app.get("/", (req, res) => {
   res.status(200).json("<h1>Hello</h1>").end();
+});
+app.post("/github/login", async (req, res) => {
+  try {
+    const { token } = req.body;
+    const response = await axios.get("https://api.github.com/user", {
+      headers: {
+        Authorization: token,
+      },
+    });
+    const data = await response.json();
+    console.log(data);
+    return res.status(200).send(response);
+  } catch (err) {
+    console.log(err);
+  }
 });
 app.post("/google/login", async (req, res) => {
   try {
